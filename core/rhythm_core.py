@@ -38,7 +38,9 @@ class DrumStep:
     """
     intensity: int = 0
     velocity_base: int = 100
- 
+    timing_ticks: int = 0       # Offset en ticks (puede ser negativo)
+    duration_ticks: int = 120   # Duración de la nota
+
     @property
     def velocity_float(self) -> float:
         if self.intensity == 0:
@@ -149,8 +151,56 @@ class RhythmEngine:
  
                 # Guardar en tracks (legacy)
                 blk.tracks[inst_name] = steps
- 
-            # ---- PASO 4: Convertir tracks a events (NUEVO) ----
+
+            # ---- PASO 4: Cargar HUMANIZACION (velocities y timings reales) ----
+            try:
+                df_human = pd.read_excel(self.db_path, sheet_name='HUMANIZACION')
+
+                for _, row in df_human.iterrows():
+                    pid = str(row['ID_PATRON']).strip()
+                    inst = str(row['INSTRUMENTO']).strip()
+
+                    if pid not in self._patterns:
+                        continue
+
+                    blk = self._patterns[pid]
+
+                    if inst not in blk.tracks:
+                        continue
+
+                    # Leer V1-V16 (velocities) y T1-T16 (timings)
+                    for step_num in range(1, 17):
+                        step_idx = step_num - 1
+
+                        if step_idx >= len(blk.tracks[inst]):
+                            continue
+
+                        step_obj = blk.tracks[inst][step_idx]
+
+                        # Velocity de la columna Vn
+                        vel_col = f'V{step_num}'
+                        if vel_col in row.index and pd.notna(row[vel_col]):
+                            vel = int(row[vel_col])
+                            if vel > 0:
+                                step_obj.intensity = 1
+                                step_obj.velocity_base = vel
+
+                        # Timing de la columna Tn (en ticks)
+                        timing_col = f'T{step_num}'
+                        if timing_col in row.index and pd.notna(row[timing_col]):
+                            step_obj.timing_ticks = int(row[timing_col])
+
+                    # Duration opcional
+                    if 'DURATION' in row.index and pd.notna(row['DURATION']):
+                        for step_obj in blk.tracks[inst]:
+                            step_obj.duration_ticks = int(row['DURATION'])
+
+                print(f"✅ Humanización cargada: velocities (V1-V16) y timings (T1-T16)")
+
+            except Exception as e:
+                print(f"⚠️ No se pudo cargar HUMANIZACION: {e}")
+
+            # ---- PASO 5: Convertir tracks a events (NUEVO) ----
             for pid, blk in self._patterns.items():
                 if blk.tracks:
                     # Convertir el dict legacy a lista de NoteEvent
@@ -159,11 +209,11 @@ class RhythmEngine:
                         bars=blk.duration_bars
                     )
                     blk.events = events
- 
+
                     # Debug: mostrar cuántos eventos se crearon (solo primeros 3)
                     if events and len(self._patterns) <= 3:
                         print(f"✅ {pid}: {len(events)} eventos creados")
- 
+
         except Exception as e:
             print(f"❌ Error cargando database.xlsx: {e}")
             import traceback

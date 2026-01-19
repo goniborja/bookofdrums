@@ -270,7 +270,7 @@ def convert_legacy_tracks_to_events(
         bars: Number of bars (default 1)
 
     Returns:
-        List of NoteEvent objects
+        List of NoteEvent objects with humanization (offset_ms from timing_ticks)
     """
     events = []
     steps_per_bar = 16
@@ -294,12 +294,17 @@ def convert_legacy_tracks_to_events(
             # Calculate position in beats
             position = step_idx * beats_per_step
 
-            # Create event with offset_ms = 0.0 (no humanization yet)
+            # Timing humanizado: ticks -> ms aproximado
+            # A 120 BPM, 480 PPQ: 1 tick = 1.04 ms
+            timing_ticks = getattr(step, 'timing_ticks', 0)
+            offset_ms = timing_ticks * 1.04
+
+            # Create event with humanization from timing_ticks
             event = NoteEvent(
                 instrument=instrument,
                 position=position,
                 velocity=int(velocity),
-                offset_ms=0.0,
+                offset_ms=offset_ms,
             )
             events.append(event)
 

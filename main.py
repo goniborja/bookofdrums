@@ -419,6 +419,26 @@ class BookOfDrumsApp(QMainWindow):
         if not self.song_data_objects:
             return QMessageBox.warning(self, "Aviso", "Timeline vacía.")
 
+        # ========== DEBUG: Verificar humanización ==========
+        print("\n" + "="*60)
+        print("🔍 DEBUG: VERIFICACIÓN DE HUMANIZACIÓN")
+        print("="*60)
+
+        for blk in self.song_data_objects[:1]:
+            print(f"\nPatrón: {blk.id_name}")
+            print(f"Eventos: {len(blk.events)}")
+
+            for event in blk.events[:8]:
+                if event.offset_ms != 0.0:
+                    timing_info = f"offset_ms={event.offset_ms:.1f} ✅"
+                else:
+                    timing_info = "SIN HUMANIZACIÓN ⚠️"
+
+                print(f"  {event.instrument.name:15} vel={event.velocity:3d} {timing_info}")
+
+        print("="*60 + "\n")
+        # ===================================================
+
         f, _ = QFileDialog.getSaveFileName(self, "Exportar MIDI", "song.mid", "MIDI (*.mid)")
         if not f:
             return
@@ -636,56 +656,82 @@ class BookOfDrumsApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"{e}")
     def populate_tree(self):
-        """Rellena el árbol de ritmos.
-
-        Prioridad: jerarquía real de database.xlsx vía DatabaseManager
-        (Estilo -> Fuente/Variación -> Patrón).
-
-        Fallback: grouping legacy basado en RhythmEngine.
-        """
+        """Rellena el árbol: TIPO -> ESTILO -> PATRÓN"""
         self.tree.clear()
 
-        # --- Sidebar data-driven (database.xlsx) ---
-        if getattr(self, 'dbm', None):
-            for style_id in self.dbm.get_style_ids():
-                style_node = QTreeWidgetItem(self.tree)
-                style_node.setText(0, self.dbm.style_label(style_id))
-                style_node.setExpanded(True)
+        tipo_config = {
+            'intro':  ('🎬 INTRO', False),
+            'groove': ('🔄 GROOVE', True),   # Expandido por defecto
+            'break':  ('💥 BREAK', False),
+            'fills':  ('🥁 FILLS', False),
+            'outro':  ('🏁 OUTRO', False),
+        }
 
-                for fuente in self.dbm.get_sources(style_id):
-                    fuente_node = QTreeWidgetItem(style_node)
-                    fuente_node.setText(0, fuente)
-                    fuente_node.setExpanded(False)
+        # --- Jerarquía: TIPO -> ESTILO -> PATRÓN ---
+        if getattr(self, 'dbm', None) and hasattr(self.dbm, 'get_tipos'):
+            for tipo in self.dbm.get_tipos():
+                icon, expanded = tipo_config.get(tipo, (tipo.upper(), False))
 
-                    for pid in self.dbm.get_patterns_for(style_id, fuente):
-                        # Playback compatibility: only patterns known by RhythmEngine
+                tipo_node = QTreeWidgetItem(self.tree)
+                tipo_node.setText(0, icon)
+                tipo_node.setExpanded(expanded)
+
+                for style_id in self.dbm.get_styles_for_tipo(tipo):
+                    style_node = QTreeWidgetItem(tipo_node)
+                    style_node.setText(0, self.dbm.style_label(style_id))
+                    style_node.setExpanded(False)
+
+                    for pid in self.dbm.get_patterns_for_tipo_style(tipo, style_id):
                         if not self.engine.get_pattern(pid):
                             continue
-                        item = QTreeWidgetItem(fuente_node)
+                        item = QTreeWidgetItem(style_node)
                         item.setText(0, self.dbm.get_pattern_name(pid))
                         item.setData(0, Qt.ItemDataRole.UserRole, pid)
             return
 
-        # --- Fallback legacy (por keywords) ---
-        grouped = {}
-        for pid, b in self.engine._patterns.items():
-            est = b.estilo_id.upper()
-            if est not in grouped: grouped[est] = []
-            grouped[est].append(b)
-        for est in sorted(grouped.keys()):
-            style_node = QTreeWidgetItem(self.tree); style_node.setText(0, est); style_node.setExpanded(True)
-            loops_node = QTreeWidgetItem(style_node); loops_node.setText(0, '🔄 Grooves'); loops_node.setExpanded(True)
-            fills_node = QTreeWidgetItem(style_node); fills_node.setText(0, '🔥 Fills & Cortes'); fills_node.setExpanded(True)
-            has_loops = False; has_fills = False
-            for b in grouped[est]:
-                kws = ['fill', 'intro', 'outro', 'break', 'roll', 'end']
-                is_fill = any(k in b.name_human.lower() for k in kws)
-                target = fills_node if is_fill else loops_node
-                item = QTreeWidgetItem(target); item.setText(0, b.name_human); item.setData(0, Qt.ItemDataRole.UserRole, b.id_name)
-                if is_fill: has_fills = True
-                else: has_loops = True
-            if not has_loops: style_node.removeChild(loops_node)
-            if not has_fills: style_node.removeChild(fills_node)
+        # --- Fallback: detección automática ---
+        tipos = {'intro': [], 'groove': [], 'break': [], 'fills': [], 'outro': []}
+
+        for pid, blk in self.engine._patterns.items():
+            tipo = self._detect_tipo_from_name(blk.name_human)
+            tipos[tipo].append(blk)
+
+        for tipo, patterns in tipos.items():
+            if not patterns:
+                continue
+
+            icon, expanded = tipo_config.get(tipo, (tipo.upper(), False))
+            tipo_node = QTreeWidgetItem(self.tree)
+            tipo_node.setText(0, icon)
+            tipo_node.setExpanded(expanded)
+
+            # Agrupar por estilo
+            by_style = {}
+            for blk in patterns:
+                by_style.setdefault(blk.estilo_id, []).append(blk)
+
+            for style_id in sorted(by_style.keys()):
+                style_node = QTreeWidgetItem(tipo_node)
+                style_node.setText(0, style_id.upper())
+                style_node.setExpanded(False)
+
+                for blk in sorted(by_style[style_id], key=lambda b: b.name_human):
+                    item = QTreeWidgetItem(style_node)
+                    item.setText(0, blk.name_human)
+                    item.setData(0, Qt.ItemDataRole.UserRole, blk.id_name)
+
+    def _detect_tipo_from_name(self, name: str) -> str:
+        """Detecta tipo por keywords."""
+        name_lower = name.lower()
+        if any(k in name_lower for k in ['intro', 'count', 'opening']):
+            return 'intro'
+        elif any(k in name_lower for k in ['break', 'stop', 'cut']):
+            return 'break'
+        elif any(k in name_lower for k in ['fill', 'roll', 'redoble']):
+            return 'fills'
+        elif any(k in name_lower for k in ['outro', 'end', 'final']):
+            return 'outro'
+        return 'groove'
 
     def rebuild_song_from_ui(self):
         """Reconstruye self.song_data_objects a partir del timeline.

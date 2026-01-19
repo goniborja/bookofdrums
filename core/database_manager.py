@@ -40,6 +40,7 @@ class PatternInfo:
     bpm: int
     description: str
     source: str
+    tipo: str  # intro, break, groove, fills, outro
 
 
 class DatabaseManager(QObject):
@@ -131,6 +132,11 @@ class DatabaseManager(QObject):
             desc = str(r.get("DESCRIPCION", "")).strip()
             src = str(r.get("FUENTE", "")).strip() or "(Sin fuente)"
 
+            # Detectar TIPO (de columna si existe, o por keywords)
+            tipo = str(r.get("TIPO", "")).strip().lower() if "TIPO" in r.index else ""
+            if not tipo:
+                tipo = self._detect_tipo(name)
+
             self.patterns[pid] = PatternInfo(
                 id=pid,
                 style_id=style_id,
@@ -138,23 +144,41 @@ class DatabaseManager(QObject):
                 bpm=bpm,
                 description=desc,
                 source=src,
+                tipo=tipo,
             )
 
+    def _detect_tipo(self, pattern_name: str) -> str:
+        """Detecta el tipo de patrón por palabras clave."""
+        name_lower = pattern_name.lower()
+        if any(k in name_lower for k in ['intro', 'apertura', 'opening', 'count']):
+            return 'intro'
+        elif any(k in name_lower for k in ['break', 'corte', 'cut', 'stop']):
+            return 'break'
+        elif any(k in name_lower for k in ['fill', 'redoble', 'roll']):
+            return 'fills'
+        elif any(k in name_lower for k in ['outro', 'final', 'ending', 'end', 'coda']):
+            return 'outro'
+        return 'groove'
+
     def _build_sidebar_index(self) -> None:
+        """Construye índice: TIPO -> ESTILO -> [pattern_ids]"""
         idx: Dict[str, Dict[str, List[str]]] = {}
 
         for pid, p in self.patterns.items():
-            idx.setdefault(p.style_id, {})
-            idx[p.style_id].setdefault(p.source, [])
-            idx[p.style_id][p.source].append(pid)
+            tipo = p.tipo or 'groove'
+            idx.setdefault(tipo, {})
+            idx[tipo].setdefault(p.style_id, [])
+            idx[tipo][p.style_id].append(pid)
 
-        # stable ordering
-        for st, by_src in idx.items():
-            for src, pids in by_src.items():
+        # Ordenar patrones dentro de cada estilo
+        for tipo, by_style in idx.items():
+            for style, pids in by_style.items():
                 pids.sort(key=lambda x: self.patterns[x].name.lower())
-            idx[st] = dict(sorted(by_src.items(), key=lambda kv: kv[0].lower()))
+            idx[tipo] = dict(sorted(by_style.items(), key=lambda kv: kv[0].lower()))
 
-        self.sidebar_index = dict(sorted(idx.items(), key=lambda kv: kv[0].lower()))
+        # Orden fijo de tipos
+        tipo_order = ['intro', 'groove', 'break', 'fills', 'outro']
+        self.sidebar_index = {t: idx.get(t, {}) for t in tipo_order if t in idx}
 
     # -------- UI helpers --------
 
@@ -181,3 +205,17 @@ class DatabaseManager(QObject):
 
     def get_patterns_for(self, style_id: str, source: str) -> List[str]:
         return list(self.sidebar_index.get(style_id, {}).get(source, []))
+
+    # -------- NEW: TIPO -> ESTILO -> PATRON helpers --------
+
+    def get_tipos(self) -> List[str]:
+        """Devuelve lista de tipos disponibles."""
+        return list(self.sidebar_index.keys())
+
+    def get_styles_for_tipo(self, tipo: str) -> List[str]:
+        """Devuelve estilos que tienen patrones de ese tipo."""
+        return list(self.sidebar_index.get(tipo, {}).keys())
+
+    def get_patterns_for_tipo_style(self, tipo: str, style_id: str) -> List[str]:
+        """Devuelve patrones de un tipo y estilo específicos."""
+        return list(self.sidebar_index.get(tipo, {}).get(style_id, []))
