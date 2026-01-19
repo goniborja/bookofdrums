@@ -153,6 +153,7 @@ class RhythmEngine:
                 blk.tracks[inst_name] = steps
 
             # ---- PASO 4: Cargar HUMANIZACION (velocities y timings reales) ----
+            # IMPORTANTE: Si REJILLAS está vacía, CREAR tracks desde HUMANIZACION
             try:
                 df_human = pd.read_excel(self.db_path, sheet_name='HUMANIZACION')
 
@@ -165,8 +166,9 @@ class RhythmEngine:
 
                     blk = self._patterns[pid]
 
+                    # Si el track NO existe, crearlo desde HUMANIZACION (fallback si REJILLAS vacía)
                     if inst not in blk.tracks:
-                        continue
+                        blk.tracks[inst] = [DrumStep(intensity=0, velocity_base=100) for _ in range(16)]
 
                     # Leer V1-V16 (velocities) y T1-T16 (timings)
                     for step_num in range(1, 17):
@@ -177,7 +179,7 @@ class RhythmEngine:
 
                         step_obj = blk.tracks[inst][step_idx]
 
-                        # Velocity de la columna Vn
+                        # Velocity de la columna Vn - SI > 0, hay golpe
                         vel_col = f'V{step_num}'
                         if vel_col in row.index and pd.notna(row[vel_col]):
                             vel = int(row[vel_col])
