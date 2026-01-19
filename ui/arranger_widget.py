@@ -10,10 +10,15 @@ Features:
 - Ctrl + MouseWheel zoom
 - Delete/Backspace removes selected clips
 - Snap grid: Bar / 1/2 / 1/4 / 1/8 / 1/16
+- Collision detection: prevents overlapping pattern blocks
 
 Step 10 update (UX):
 - Clips display the human pattern name (from RhythmEngine/DatabaseManager if available)
 - Clip width auto-expands to pattern bars if engine patterns contain >16 steps
+
+Step 11 update (Collision Detection):
+- Clips cannot overlap - visual feedback shows when collision would occur
+- Drag operations are constrained to valid positions
 """
 
 from dataclasses import dataclass
@@ -59,15 +64,20 @@ class ClipPlacement:
 class PatternClipItem(QGraphicsObject):
     moved = pyqtSignal()
 
-    def __init__(self, clip: ClipRef, bar_width_px: float, height_px: float = 64.0):
+    def __init__(self, clip: ClipRef, bar_width_px: float, height_px: float = 64.0, arranger: 'ArrangerWidget' = None):
         super().__init__()
         self.clip = clip
         self._bar_width_px = float(bar_width_px)
         self._height_px = float(height_px)
+        self._arranger = arranger  # Reference for collision detection
 
         # step = 1/16 bar
         self._step_width_px = self._bar_width_px / 16.0 if self._bar_width_px > 0 else 1.0
         self._snap_interval_px = self._bar_width_px  # default: bar snap
+
+        # Collision state for visual feedback
+        self._collision_state = False
+        self._last_valid_pos = QPointF(0.0, 0.0)
 
         self.setFlags(
             self.GraphicsItemFlag.ItemIsMovable
@@ -124,10 +134,60 @@ class PatternClipItem(QGraphicsObject):
             base = QColor("#2a2318")
             header = QColor("#c9a227")
 
-        if self.isSelected():
+        # Collision feedback: red border when would overlap
+        if self._collision_state:
+            border = QColor("#ff3333")
+        elif self.isSelected():
             border = QColor("#ffffff")
 
         return base, border, header, text
+
+    def _would_collide_at(self, x: float) -> bool:
+        """Check if placing this clip at x would cause collision with other clips."""
+        if self._arranger is None:
+            return False
+
+        my_left = x
+        my_right = x + self.boundingRect().width()
+
+        for other in self._arranger._clips:
+            if other is self:
+                continue
+            other_left = other.pos().x()
+            other_right = other_left + other.boundingRect().width()
+
+            # Check overlap (with small tolerance for floating point)
+            tolerance = 0.5
+            if my_left < other_right - tolerance and my_right > other_left + tolerance:
+                return True
+
+        return False
+
+    def _find_nearest_valid_position(self, desired_x: float) -> float:
+        """Find nearest position without collision, snapped to grid."""
+        if not self._would_collide_at(desired_x):
+            return desired_x
+
+        snap = float(self._snap_interval_px) if self._snap_interval_px > 0 else self._bar_width_px
+        my_width = self.boundingRect().width()
+
+        # Try positions to the left and right
+        for offset_mult in range(1, 100):
+            # Try right
+            test_x = desired_x + (offset_mult * snap)
+            test_x = round(test_x / snap) * snap
+            if not self._would_collide_at(test_x):
+                return test_x
+
+            # Try left
+            test_x = desired_x - (offset_mult * snap)
+            if test_x >= 0:
+                test_x = round(test_x / snap) * snap
+                if not self._would_collide_at(test_x):
+                    return test_x
+
+        # Fallback to last valid position
+        return self._last_valid_pos.x()
 
     def paint(self, painter: QPainter, option, widget: Optional[QWidget] = None) -> None:
         r = self.boundingRect()
@@ -185,9 +245,26 @@ class PatternClipItem(QGraphicsObject):
             if self._step_width_px > 0:
                 x = round(x / self._step_width_px) * self._step_width_px
 
+            # Collision detection
+            if self._would_collide_at(x):
+                # Show collision feedback
+                if not self._collision_state:
+                    self._collision_state = True
+                    self.update()
+
+                # Find nearest valid position
+                x = self._find_nearest_valid_position(x)
+            else:
+                # Clear collision feedback
+                if self._collision_state:
+                    self._collision_state = False
+                    self.update()
+
             return QPointF(float(x), float(y))
 
         if change == self.GraphicsItemChange.ItemPositionHasChanged:
+            # Store last valid position for fallback
+            self._last_valid_pos = self.pos()
             self.moved.emit()
 
         return super().itemChange(change, value)
@@ -304,6 +381,56 @@ class ArrangerWidget(QGraphicsView):
     def get_snap_divisor(self) -> int:
         return int(self._snap_divisor)
 
+    # ---- collision detection helpers
+
+    def _check_collision_at(self, x: float, width: float, exclude_item: Optional[PatternClipItem] = None) -> bool:
+        """Check if a clip of given width at position x would collide with existing clips."""
+        tolerance = 0.5
+        new_left = x
+        new_right = x + width
+
+        for clip in self._clips:
+            if clip is exclude_item:
+                continue
+            clip_left = clip.pos().x()
+            clip_right = clip_left + clip.boundingRect().width()
+
+            # Check overlap
+            if new_left < clip_right - tolerance and new_right > clip_left + tolerance:
+                return True
+
+        return False
+
+    def _find_free_position(self, width: float, preferred_x: float = 0.0) -> float:
+        """Find the nearest free position for a clip of given width."""
+        # First try the preferred position
+        if not self._check_collision_at(preferred_x, width):
+            return preferred_x
+
+        # Try positions after existing clips
+        snap = self._bar_width_px / self._snap_divisor if self._snap_divisor > 0 else self._bar_width_px
+
+        # Find end of last clip
+        end_x = 0.0
+        for clip in self._clips:
+            clip_end = clip.pos().x() + clip.boundingRect().width()
+            end_x = max(end_x, clip_end)
+
+        # Try at the end
+        test_x = round(end_x / snap) * snap if snap > 0 else end_x
+        if not self._check_collision_at(test_x, width):
+            return test_x
+
+        # Search for gaps
+        for offset_mult in range(1, 200):
+            test_x = preferred_x + (offset_mult * snap)
+            test_x = round(test_x / snap) * snap if snap > 0 else test_x
+            if not self._check_collision_at(test_x, width):
+                return test_x
+
+        # Fallback to end
+        return end_x
+
     # ---- public API
 
     def add_clip(
@@ -329,10 +456,11 @@ class ArrangerWidget(QGraphicsView):
         name_human, auto_bars = self._resolve_pattern_name_and_bars(pid, bars)
         clip = ClipRef(pattern_id=pid, name_human=name_human, bars=max(1, int(auto_bars)))
 
-        item = PatternClipItem(clip, bar_width_px=self._bar_width_px, height_px=self._height_px)
+        item = PatternClipItem(clip, bar_width_px=self._bar_width_px, height_px=self._height_px, arranger=self)
         item.set_snap_divisor(self._snap_divisor)
         item.moved.connect(self.arrangementChanged.emit)
 
+        # Calculate desired position
         if at_step is not None:
             step_w = self._bar_width_px / 16.0
             x = step_w * max(0, int(at_step))
@@ -341,7 +469,13 @@ class ArrangerWidget(QGraphicsView):
         else:
             x = self._bar_width_px * max(0, int(at_bar))
 
+        # Check for collision and find valid position
+        clip_width = max(1, int(clip.bars)) * self._bar_width_px
+        if self._check_collision_at(x, clip_width):
+            x = self._find_free_position(clip_width, x)
+
         item.setPos(QPointF(float(x), 0.0))
+        item._last_valid_pos = QPointF(float(x), 0.0)
 
         self._scene.addItem(item)
         self._clips.append(item)
@@ -475,9 +609,15 @@ class ArrangerWidget(QGraphicsView):
         p = self.mapToScene(event.position().toPoint())
         x = max(0.0, float(p.x()))
 
+        # Snap to grid
+        snap = self._bar_width_px / self._snap_divisor if self._snap_divisor > 0 else self._bar_width_px
+        if snap > 0:
+            x = round(x / snap) * snap
+
         step_w = self._bar_width_px / 16.0
         start_step = int(round(x / step_w)) if step_w > 0 else 0
 
+        # add_clip handles collision detection internally
         self.add_clip(pid, at_step=start_step)
         event.acceptProposedAction()
 

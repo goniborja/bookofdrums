@@ -261,8 +261,8 @@ def apply_humanization(event, instrument):
 ```
  
 ### 2. Enhanced Arranger Features
-- [ ] Pattern library drag-and-drop to timeline
-- [ ] Collision detection (prevent overlapping blocks)
+- [x] Pattern library drag-and-drop to timeline
+- [x] Collision detection (prevent overlapping blocks) - **Step 11**
 - [ ] Loop regions (auto-repeat patterns)
 - [ ] Tempo automation
 - [ ] Multiple pattern lanes per track
