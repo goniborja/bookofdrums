@@ -1,0 +1,13 @@
+# Requirements for ArrangerWidget and MidiExporter
+# Book of Drums v10.0 - ArrangerWidget & MidiExporter
+ 
+# Core dependencies (should already be installed)
+PyQt6>=6.0.0
+pandas>=1.3.0
+openpyxl>=3.0.0
+ 
+# New dependency for MIDI export
+mido>=1.2.0
+ 
+# Optional: For MIDI playback testing
+python-rtmidi>=1.4.0

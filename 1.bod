@@ -1,0 +1,22 @@
+{
+    "version": "1.1",
+    "bpm": 78.0,
+    "swing": 0.5,
+    "kit": "database",
+    "timeline": [
+        "rocksteady_basic",
+        "rocksteady_shantytown"
+    ],
+    "timeline_placements": [
+        {
+            "pattern_id": "rocksteady_basic",
+            "start_bar": 1,
+            "bars": 1
+        },
+        {
+            "pattern_id": "rocksteady_shantytown",
+            "start_bar": 6,
+            "bars": 1
+        }
+    ]
+}
